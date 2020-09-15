@@ -87,7 +87,7 @@ def rename(path, date):
     return None
 
 
-def renameAll(folder):
+def rename_all(folder):
     folder = os.path.abspath(folder)
     print("----------" + "-" * len(folder))
     print("Rename in {}".format(folder))
@@ -133,4 +133,4 @@ def renameAll(folder):
 if __name__ == "__main__":
     args = sys.argv[1:]
     if len(args) > 0:
-        renameAll(args[0])
+        rename_all(args[0])
