@@ -116,7 +116,7 @@ def rename_all(folder):
     
     for path, date in paths_dated.items():
         abs_path = os.path.join(folder, path)
-        renamed = rename(abs_path, date[0])
+        renamed = rename(abs_path, date)
         if renamed:
             try:
                 os.rename(abs_path, renamed)
