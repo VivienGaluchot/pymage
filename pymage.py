@@ -7,6 +7,7 @@ from PIL import Image
 import hachoir.parser
 import hachoir.metadata
 import hachoir.core.config
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import logging
 logger = logging.getLogger(__name__)
@@ -60,12 +61,18 @@ def get_date(path: str) -> Tuple[datetime, str]:
         return (meta_date, "meta")
     return (get_file_creation_date(path), "file")
 
-def get_signature(path: str) -> str:
+def get_signature(path: str) -> Optional[str]:
     sha1 = hashlib.sha1()
+    is_empty = True
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
+            if len(chunk) > 0:
+                is_empty = False
             sha1.update(chunk)
+    if is_empty:
+        return None
     return sha1.hexdigest()
+
 
 #-----------------
 # Renaming
@@ -87,7 +94,7 @@ class FileResource:
     path: str
     date: datetime
     date_source: str
-    signature: str
+    signature: Optional[str]
 
     def __init__(self, path: str):
         self.path = path
@@ -122,18 +129,20 @@ def rename_all(folder: str):
         for filename in filenames:
             file_path = os.path.join(dirpath, filename)
             paths.append(file_path)
-    paths.sort()
 
     print("Parsing files...")
 
     resources : List[FileResource] = []
-    for i, path in enumerate(paths):
-        resource = FileResource(path=path)
-        if resource.date_source == "file":
-            print(f"[{i + 1}/{len(paths)}] {path} - date not found")
-        else:
-            print(f"[{i + 1}/{len(paths)}] {path} - {resource.date}")
-        resources.append(resource)
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(FileResource, path) for path in paths]
+        for i, future in enumerate(as_completed(futures)):
+            resource = future.result()
+            if resource.date_source == "file":
+                print(f"[{i + 1}/{len(paths)}] {resource.path} - date not found")
+            else:
+                print(f"[{i + 1}/{len(paths)}] {resource.path} - {resource.date}")
+            resources.append(resource)
+    resources.sort(key=lambda x: x.path)
 
     print("Solving...")
 
@@ -142,8 +151,10 @@ def rename_all(folder: str):
     signatures: Set[str] = set()
     for resource in resources:
         # removes
-        is_removed = resource.signature in signatures
-        signatures.add(resource.signature)
+        is_removed = False
+        if resource.signature is not None:
+            is_removed = resource.signature in signatures
+            signatures.add(resource.signature)
         # renames
         renamed = resource.renamed_path(occupied_file_paths=occupied_file_paths, is_removed=is_removed)
         if renamed != resource.path:
