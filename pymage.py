@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 from datetime import datetime
@@ -59,6 +60,12 @@ def get_date(path: str) -> Tuple[datetime, str]:
         return (meta_date, "meta")
     return (get_file_creation_date(path), "file")
 
+def get_signature(path: str) -> str:
+    sha1 = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha1.update(chunk)
+    return sha1.hexdigest()
 
 #-----------------
 # Renaming
@@ -72,25 +79,34 @@ def get_renamed_path(path: str, date: datetime, index: int) -> str:
     else:
         renamed = f"{date_str}_{index}{ext}"
     return os.path.join(os.path.dirname(path), renamed)
+    
 
 
-# def rename(path: str, date: datetime, source: str) -> Optional[str]:
-#     # dont trust OS file date for renaming
-#     if source == "file":
-#         return None
+class FileResource:
+    # initial path of file
+    path: str
+    date: datetime
+    date_source: str
+    signature: str
 
-#     date_str = date.strftime("%Y%m%d_%H%M%S")
-
-#     renamed = "{}{}".format(date_str, os.path.splitext(path)[1])
-#     renamed_path = os.path.join(os.path.dirname(path), renamed)
-#     # while path != renamed_path and os.path.isfile(renamed_path):
-#     #     ctr += 1
-#     #     renamed = "{}_{}{}".format(date_str, ctr, os.path.splitext(path)[1])
-#     #     renamed_path = os.path.join(os.path.dirname(path), renamed)
-
-#     if path != renamed_path:
-#         return renamed_path
-#     return None
+    def __init__(self, path: str):
+        self.path = path
+        self.date, self.date_source = get_date(path=path)
+        self.signature = get_signature(path=path)
+    
+    def renamed_path(self, occupied_file_paths: Set[str], is_removed: bool) -> str:
+        if self.date_source == "file":
+            renamed = self.path
+        else:
+            index = 0
+            renamed = get_renamed_path(path=self.path, date=self.date, index=index)
+            while renamed != self.path and renamed in occupied_file_paths:
+                index += 1
+                renamed = get_renamed_path(path=self.path, date=self.date, index=index)
+        if is_removed:
+            base, ext = os.path.splitext(renamed)
+            renamed = f"{base}.rm{ext}"
+        return renamed
 
 
 def rename_all(folder: str):
@@ -101,48 +117,51 @@ def rename_all(folder: str):
 
     print("Listing files...")
 
-    occupied_file_paths: Set[str] = set()
-
-    input_file_paths = []
-    for dirpath, _dirnames, filenames in os.walk(folder):
+    paths = []
+    for dirpath, _, filenames in os.walk(folder):
         for filename in filenames:
             file_path = os.path.join(dirpath, filename)
-            input_file_paths.append(file_path)
-            occupied_file_paths.add(file_path)
-    input_file_paths.sort()
+            paths.append(file_path)
+    paths.sort()
 
     print("Parsing files...")
 
-    renames: List[Tuple[str, str]] = []
-    for i, path in enumerate(input_file_paths):
-        date, source = get_date(path=path)
-        if source == "file":
-            print(f"[{i + 1}/{len(input_file_paths)}] {path} -> date not found")
+    resources : List[FileResource] = []
+    for i, path in enumerate(paths):
+        resource = FileResource(path=path)
+        if resource.date_source == "file":
+            print(f"[{i + 1}/{len(paths)}] {path} - date not found")
         else:
-            # get free renamed filename
-            index = 0
-            renamed = get_renamed_path(path=path, date=date, index=index)
-            while renamed != path and renamed in occupied_file_paths:
-                index += 1
-                renamed = get_renamed_path(path=path, date=date, index=index)
-            if renamed == path:
-                print(f"[{i + 1}/{len(input_file_paths)}] {path} -> no operation")
-            else:
-                print(f"[{i + 1}/{len(input_file_paths)}] {path} -> {os.path.basename(renamed)}")
-                renames.append((path, renamed))
-                occupied_file_paths.add(renamed)
+            print(f"[{i + 1}/{len(paths)}] {path} - {resource.date}")
+        resources.append(resource)
+
+    print("Solving...")
+
+    occupied_file_paths: Set[str] = set(paths)
+    renames: List[Tuple[FileResource, str]] = []
+    signatures: Set[str] = set()
+    for resource in resources:
+        # removes
+        is_removed = resource.signature in signatures
+        signatures.add(resource.signature)
+        # renames
+        renamed = resource.renamed_path(occupied_file_paths=occupied_file_paths, is_removed=is_removed)
+        if renamed != resource.path:
+            print(f"[rename] {resource.path} -> {renamed}")
+            renames.append((resource, renamed))
+            occupied_file_paths.add(renamed)
     
-    print("Found {} files, {} to rename, execute ? (y/n)".format(len(input_file_paths), len(renames)))
+    print("Found {} files, {} to rename, execute ? (y/n)".format(len(paths), len(renames)))
     if input("") != "y":
         return
     
-    for src, target in renames:
+    for resource, target in renames:
         try:
-            os.rename(src, target)
-            print(f"[renamed] {src} -> {renamed}")
+            os.rename(resource.path, target)
+            print(f"[renamed] {resource.path} -> {renamed}")
         except Exception:
             logger.exception("rename failed")
-            print(f"[failed] {src} -> {renamed}")
+            print(f"[failed] {resource.path} -> {renamed}")
 
 
 #-----------------
